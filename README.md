@@ -1,62 +1,46 @@
-# DNS Changer
+# DNS Changer for GNOME Shell
 
-A GNOME Shell extension for switching DNS providers on the active NetworkManager connection. It starts with Cloudflare, Google, and Quad9, and lets you add custom IPv4 and IPv6 DNS servers in Preferences. The provider-switching flow is inspired by [Sanad](https://github.com/MirS0bhan/sanad).
+Switch DNS providers from the GNOME top panel. DNS Changer is a GNOME Shell extension for Linux that lets you choose the DNS servers used by your active Wi-Fi, Ethernet, or mobile broadband connection managed by NetworkManager. Choose a built-in provider, add your own IPv4 or IPv6 DNS servers, compare DNS response times, and restore your original settings without manually editing each connection profile.
 
 ## Features
 
-- Switch the active Ethernet, Wi-Fi, or mobile broadband profile to a DNS provider.
-- Add and remove custom providers in the extension preferences.
-- Import regional DNS presets from the panel menu: Electro, Bagzar, Shekan, and 403 for Iran; Yandex DNS modes and MSK-IX for Russia.
-- Restore each connection profile's DNS settings from before DNS Changer first changed it.
-- Restart NetworkManager after changing or restoring DNS so it reloads the saved settings.
-- Benchmark each provider with 300 probes. Four panel indicators show median lookup time, P95 lookup time, success rate, and consistency independently: green means well, white means okay, and red means low. For latency, green is up to 50 ms and red is over 250 ms; success is green at 99% or better and red below 95%; consistency is green at 10 ms variation or less and red above 50 ms. Values between those thresholds are white. Click any indicator for the benchmark details, including protocol and provider features. If `dig` is unavailable, the latency indicators use ICMP ping as an approximation.
+- **Switch DNS providers quickly:** Choose Cloudflare, Google Public DNS, or Quad9 from the panel menu.
+- **Use custom DNS servers:** Add and remove providers with your own IPv4 and IPv6 addresses in Preferences.
+- **Compare provider performance:** Run a quick check or a full DNS benchmark to review response speed, reliability, and consistency on your network.
+- **Restore your previous settings:** DNS Changer saves a connection's original DNS settings before changing them, so you can restore them from the panel menu.
+- **Keep settings with your connection:** DNS choices are saved to the active NetworkManager connection profile and remain in place when you reconnect to that profile.
 
-Choose **Benchmark DNS providers** from the panel menu to start a benchmark for every configured provider. Each benchmark sends 300 DNS queries to that provider, or 300 ICMP probes when `dig` is unavailable. Opening the menu alone does not send these probes.
+## DNS provider checks
 
-The benchmark probes each provider's first configured IPv4 server, or its first IPv6 server when no IPv4 server is configured. It runs up to ten probes per provider at a time. DNS throughput is an approximate client-side rate across the benchmark; DNS query timing measures resolver response, while ping only measures network latency to the server address. Feature labels are provider metadata and are not tested by the benchmark.
+The first time you open the menu, DNS Changer runs a quick check with 10 probes per provider. It reuses those results for ten minutes; after that, opening the menu starts a fresh quick check. Choose **Run full DNS benchmark** for a new test with 300 probes per provider. Click a provider's result indicator to see the details.
 
-Regional presets are saved as custom providers and can be removed in Preferences. The 403 addresses are private-network addresses and work only on supported domestic Iranian networks. MSK-IX documents filtering against Russia's prohibited-sites registry. Test the imported options on your own ISP; local DNS performance and reachability vary by network.
+Results show median lookup time (typical response speed), 95th-percentile response time (slower responses), success rate, and response-time consistency. The checks use each provider's first IPv4 server, or its first IPv6 server when no IPv4 server is configured. Results can vary by network and location, so use the full benchmark for a larger sample.
 
-## Requirements
+DNS checks use `dig` to send DNS queries. If `dig` is unavailable and `ping` is installed, DNS Changer can use ping instead. Ping measures the network response to the server address, not the time taken to resolve a DNS query.
 
-- GNOME Shell 45–51 (the versions declared in `metadata.json`)
-- NetworkManager with `nmcli`
-- `dig` for DNS latency and throughput, or `ping` for the fallback latency check
+## Regional DNS presets
 
-Changing a saved system connection or restarting NetworkManager may require authorization from the desktop's PolicyKit agent. Restarting NetworkManager briefly interrupts network connections while they reconnect.
+The panel menu can add regional providers to your list:
 
-## Build and install
+- **Iran:** Electro, Bagzar, Shekan, and 403.
+- **Russia:** Yandex DNS Basic, Safe, and Family, plus MSK-IX Public DNS.
 
-```sh
-make install
-```
+These presets are saved as custom providers and can be removed in Preferences. The 403 addresses are private-network addresses and work only on supported domestic Iranian networks. Provider availability and performance depend on your network.
 
-`make install` builds the bundle and installs it for the current user. If the extension is already enabled, the target reloads it in the current session. For a first install or a disabled extension, enable it with:
+## Using DNS Changer
 
-```sh
-make enable
-```
+1. Open **DNS Changer** from the GNOME top panel.
+2. Select a provider to apply it to your active connection. To add your own servers, open Preferences and choose **Add a custom provider**.
+3. To undo a change, choose **Restore original DNS for this connection** from the panel menu.
 
-If GNOME Shell has not discovered a first-time manual install, start a new session and run `make enable`. If you already built the bundle and are inside `dist/`, install it with:
+## Compatibility and network behavior
 
-```sh
-gnome-extensions install --force dns-changer@hossein.dev.shell-extension.zip
-```
-
-For that manual install, enable it with `gnome-extensions enable dns-changer@hossein.dev`. If it was already enabled, reload it with `gnome-extensions disable dns-changer@hossein.dev && gnome-extensions enable dns-changer@hossein.dev`.
-
-To remove generated build files:
-
-```sh
-make clean
-```
-
-## Use
-
-Open the DNS Changer icon in the top panel and choose a provider. Use **Add provider…** to add or remove custom servers in Preferences. The extension saves the original IPv4 and IPv6 DNS values and the NetworkManager automatic-DNS flags for each changed connection profile. **Restore original DNS for this connection** restores those values and removes the saved backup for that profile.
-
-DNS settings are stored on the active NetworkManager profile, so they persist when reconnecting to that profile. Applying or restoring DNS restarts NetworkManager, which briefly interrupts network traffic while connections reconnect.
+DNS Changer supports GNOME Shell versions 45–51 and connections managed by NetworkManager. Applying or restoring DNS settings restarts NetworkManager so the change takes effect. Your network connection may briefly disconnect and reconnect, and your desktop may ask you to authorize the change.
 
 ## License
 
-DNS Changer is licensed under GPL-2.0-or-later. See [LICENSE](LICENSE).
+DNS Changer is free and open-source software licensed under GPL-2.0-or-later. See [LICENSE](LICENSE).
+
+## Contributing
+
+For build, demo, and contribution instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).

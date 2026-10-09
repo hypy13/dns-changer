@@ -1,9 +1,12 @@
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Animation from 'resource:///org/gnome/shell/ui/animation.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import St from 'gi://St';
 
 import {
@@ -16,13 +19,16 @@ import {
     updateProfileDns,
 } from './network.js';
 
-const BENCHMARK_SAMPLE_COUNT = 300;
+const QUICK_BENCHMARK_SAMPLE_COUNT = 10;
+const FULL_BENCHMARK_SAMPLE_COUNT = 300;
+const BENCHMARK_PROVIDER_CONCURRENCY = 2;
+const BENCHMARK_REFRESH_INTERVAL = 10 * 60 * 1000;
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
-const DOT_METRICS = [
-    {key: 'medianLatency', label: 'Median lookup time'},
-    {key: 'p95Latency', label: 'P95 lookup time'},
-    {key: 'successRate', label: 'Success rate'},
-    {key: 'consistency', label: 'Consistency'},
+const BENCHMARK_METRICS = [
+    {key: 'medianLatency', label: 'Median lookup time', description: 'Typical response speed.'},
+    {key: 'p95Latency', label: 'P95 lookup time', description: 'Shows how slow queries can get under normal testing.'},
+    {key: 'successRate', label: 'Success rate', description: 'Helps avoid a fast but unreliable resolver.'},
+    {key: 'consistency', label: 'Consistency', description: 'Shows response-time variation using standard deviation.'},
 ];
 const DEFAULT_PROVIDER_FEATURES = {
     cloudflare: ['DNSSEC'],
@@ -158,17 +164,32 @@ function metricColor(quality) {
         return '#ed333b';
     if (quality === 'well')
         return '#33d17a';
-    return '#ffffff; text-shadow: 0 0 2px #000000';
+    if (quality === 'ok')
+        return '#f6d32d';
+    return '#9a9996';
+}
+
+function benchmarkQuality(metrics, benchmark) {
+    if (!benchmark || benchmark.state === 'queued' || benchmark.state === 'failed')
+        return 'unknown';
+
+    const qualities = BENCHMARK_METRICS.map(metric =>
+        metricQuality(metric.key, metrics[metric.key], benchmark));
+    for (const quality of ['low', 'ok', 'unknown']) {
+        if (qualities.includes(quality))
+            return quality;
+    }
+    return 'well';
 }
 
 function qualityLabel(quality) {
     if (quality === 'low')
-        return _('Low');
+        return _('Red · Poor');
     if (quality === 'well')
-        return _('Well');
+        return _('Green · Good');
     if (quality === 'ok')
-        return _('Okay');
-    return _('Not tested');
+        return _('Yellow · Okay');
+    return _('Not rated');
 }
 
 function metricValue(metricKey, metrics, benchmark) {
@@ -264,10 +285,12 @@ export default class DnsChangerExtension extends Extension {
         this._enabled = true;
         this._busy = false;
         this._benchmarking = false;
+        this._benchmarkKind = null;
         this._benchmarkResults = new Map();
+        this._lastBenchmarkAt = null;
+        this._lastBenchmarkProviderKey = null;
         this._providerRows = new Map();
         this._currentDnsRequest = 0;
-        this._benchmarkMenuItem = null;
         this._benchmarkCancellable = null;
         this._settings = this.getSettings(SETTINGS_SCHEMA);
         this._indicator = new PanelMenu.Button(0.0, _('DNS Changer'), false);
@@ -276,14 +299,27 @@ export default class DnsChangerExtension extends Extension {
             icon_name: 'preferences-system-network-symbolic',
             style_class: 'system-status-icon',
         });
-        this._indicator.add_child(icon);
+        const panelBox = new St.BoxLayout({style: 'spacing: 4px;'});
+        this._benchmarkSpinner = new Animation.Spinner(12, {hideOnStop: true});
+        this._benchmarkSpinner.accessible_name = _('Benchmarking DNS providers');
+        panelBox.add_child(icon);
+        panelBox.add_child(this._benchmarkSpinner);
+        this._indicator.add_child(panelBox);
         this._menuOpenId = this._indicator.menu.connect('open-state-changed', (menu, isOpen) => {
-            if (isOpen)
+            if (isOpen) {
                 this._refreshCurrentDns();
+                void this._checkSpeeds(loadProviders(this._settings));
+            }
         });
         this._settingsChangedId = this._settings.connect(
             'changed::dns-providers',
-            () => this._populateMenu()
+            () => {
+                this._lastBenchmarkAt = null;
+                this._lastBenchmarkProviderKey = null;
+                this._benchmarkCancellable?.cancel();
+                this._benchmarkResults = new Map();
+                this._populateMenu();
+            }
         );
 
         this._populateMenu();
@@ -306,8 +342,10 @@ export default class DnsChangerExtension extends Extension {
         this._indicator = null;
         this._benchmarkResults = null;
         this._providerRows = null;
-        this._currentDnsLabel = null;
         this._benchmarkMenuItem = null;
+        this._currentDnsLabel = null;
+        this._benchmarkSpinner = null;
+        this._benchmarkKind = null;
         this._settings = null;
     }
 
@@ -316,9 +354,13 @@ export default class DnsChangerExtension extends Extension {
             Main.notify(title, message);
     }
 
-    _addItem(label, callback) {
+    _addItem(label, callback, keepMenuOpen = false) {
         const item = new PopupMenu.PopupMenuItem(label);
-        item.connect('activate', callback);
+        item.connect('activate', (menuItem, event) => {
+            if (keepMenuOpen)
+                GObject.signal_stop_emission_by_name(menuItem, 'activate');
+            callback(event);
+        });
         this._indicator.menu.addMenuItem(item);
         return item;
     }
@@ -329,29 +371,26 @@ export default class DnsChangerExtension extends Extension {
         const metricsLabel = new St.Label({
             style: 'font-size: 0.9em; opacity: 0.9;',
         });
-        const dotsBox = new St.BoxLayout({style: 'spacing: 2px;'});
-        const dots = DOT_METRICS.map(metric => {
-            const labelText = _(metric.label);
-            const label = new St.Label({text: '●', style: 'font-size: 9px;'});
-            const button = new St.Button({
-                child: label,
-                can_focus: true,
-                track_hover: true,
-                style_class: 'flat',
-                accessible_name: `${labelText}. ${_('Click to view benchmark details')}`,
-            });
-            button.connect('clicked', () => this._showBenchmarkDetails(provider));
-            dotsBox.add_child(button);
-            return {key: metric.key, label: labelText, button, dot: label};
+        const spinner = new Animation.Spinner(12, {hideOnStop: true});
+        spinner.accessible_name = `${provider.name}: ${_('Benchmarking')}`;
+        const summaryDot = new St.Label({text: '●', style: 'font-size: 9px;'});
+        const summaryButton = new St.Button({
+            child: summaryDot,
+            can_focus: true,
+            track_hover: true,
+            style_class: 'flat',
+            accessible_name: _('Click to view benchmark details'),
         });
+        summaryButton.connect('clicked', () => this._showBenchmarkDetails(provider));
 
         item.add_child(nameLabel);
+        item.add_child(spinner);
         item.add_child(metricsLabel);
-        item.add_child(dotsBox);
+        item.add_child(summaryButton);
         item.connect('activate', () => this._applyProvider(provider));
         item.setSensitive(!this._busy);
         this._indicator.menu.addMenuItem(item);
-        this._providerRows.set(provider.id, {item, metricsLabel, dots, provider});
+        this._providerRows.set(provider.id, {item, metricsLabel, spinner, summaryDot, summaryButton, provider});
         this._updateProviderRow(provider.id);
     }
 
@@ -362,14 +401,24 @@ export default class DnsChangerExtension extends Extension {
 
         const benchmark = this._benchmarkResults?.get(providerId);
         const metrics = benchmarkMetrics(benchmark);
+        const testing = benchmark?.state === 'queued' || benchmark?.state === 'running';
+        if (testing && !row.spinner.visible)
+            row.spinner.play();
+        else if (!testing)
+            row.spinner.stop();
 
         if (!benchmark) {
             row.metricsLabel.text = _('— ms median · —% success');
+        } else if (benchmark.state === 'queued') {
+            row.metricsLabel.text = _('Waiting to benchmark…');
         } else if (benchmark.state === 'running') {
             const medianText = metrics.medianLatency === null
                 ? '—'
                 : `${Math.round(metrics.medianLatency)} ms`;
-            row.metricsLabel.text = `${medianText} median · ${metrics.completedCount}/${BENCHMARK_SAMPLE_COUNT}`;
+            const label = benchmark.kind === 'quick' ? _('Quick test…') : _('Full benchmark…');
+            row.metricsLabel.text = `${label} ${metrics.completedCount}/${metrics.sampleCount} · ${medianText} median`;
+        } else if (benchmark.state === 'failed') {
+            row.metricsLabel.text = _('Benchmark unavailable');
         } else {
             const medianText = metrics.medianLatency === null
                 ? '—'
@@ -380,12 +429,10 @@ export default class DnsChangerExtension extends Extension {
             row.metricsLabel.text = `${medianText} · ${successText}`;
         }
 
-        row.dots.forEach(dot => {
-            const quality = metricQuality(dot.key, metrics[dot.key], benchmark);
-            dot.dot.style = `color: ${metricColor(quality)}; font-size: 9px;`;
-            dot.button.accessible_name = `${dot.label}: ${metricValue(dot.key, metrics, benchmark)} · ` +
-                `${qualityLabel(quality)}. ${_('Click to view benchmark details')}`;
-        });
+        const quality = benchmarkQuality(metrics, benchmark);
+        row.summaryDot.style = `color: ${metricColor(quality)}; font-size: 9px;`;
+        row.summaryButton.accessible_name = `${row.provider.name}: ${_('Overall benchmark')} · ` +
+            `${qualityLabel(quality)}. ${_('Click to view benchmark details')}`;
     }
 
     _showBenchmarkDetails(provider) {
@@ -393,36 +440,31 @@ export default class DnsChangerExtension extends Extension {
         const metrics = benchmarkMetrics(benchmark);
         const dialog = new ModalDialog.ModalDialog({styleClass: 'dns-benchmark-dialog'});
         const details = new St.BoxLayout({vertical: true, style: 'spacing: 10px;'});
-        const mode = !benchmark
+        const mode = !benchmark?.mode
             ? _('Not tested')
             : benchmark.mode === 'icmp' ? _('ICMP ping') : _('UDP');
         const entries = [
             [
-                _('Median lookup time'),
-                metricValue('medianLatency', metrics, benchmark),
-                _('Typical response speed.'),
+                _('Test'),
+                benchmark
+                    ? `${benchmark.kind === 'quick' ? _('Quick') : _('Full')} · ${metrics.completedCount}/${metrics.sampleCount}`
+                    : _('Not tested'),
+                benchmark?.kind === 'quick'
+                    ? _('A quick estimate. Run the full benchmark for more reliable results.')
+                    : _('The full benchmark collects 300 probes per provider.'),
             ],
-            [
-                _('P95 lookup time'),
-                metricValue('p95Latency', metrics, benchmark),
-                _('Shows how slow queries can get under normal testing.'),
-            ],
-            [
-                _('Success rate'),
-                metricValue('successRate', metrics, benchmark),
-                _('Helps avoid a fast but unreliable resolver.'),
-            ],
-            [
-                _('Consistency'),
-                metricValue('consistency', metrics, benchmark),
-                _('Shows response-time variation using standard deviation.'),
-            ],
+            ...BENCHMARK_METRICS.map(metric => [
+                _(metric.label),
+                metricValue(metric.key, metrics, benchmark),
+                _(metric.description),
+                metric.key,
+            ]),
             [
                 _('Protocol'),
                 mode,
                 benchmark?.mode === 'icmp'
                     ? _('DNS checks were unavailable, so this is a ping approximation.')
-                    : benchmark
+                    : benchmark?.mode
                         ? _('The benchmark sends standard DNS queries over UDP.')
                         : _('Run the benchmark to determine the test protocol.'),
             ],
@@ -437,12 +479,28 @@ export default class DnsChangerExtension extends Extension {
             text: provider.name,
             style: 'font-size: 1.2em; font-weight: bold;',
         }));
-        for (const [title, value, description] of entries) {
+        const overallQuality = benchmarkQuality(metrics, benchmark);
+        dialog.contentLayout.add_child(new St.Label({
+            text: `${_('Overall benchmark')}: ● ${qualityLabel(overallQuality)}`,
+            style: `color: ${metricColor(overallQuality)};`,
+        }));
+        dialog.contentLayout.add_child(new St.Label({
+            text: _('The overall color reflects the lowest-rated metric.'),
+            style: 'font-size: 0.9em; opacity: 0.8;',
+        }));
+        for (const [title, value, description, metricKey] of entries) {
             const entry = new St.BoxLayout({vertical: true, style: 'spacing: 3px;'});
             const heading = new St.BoxLayout({style: 'spacing: 12px;'});
             heading.add_child(new St.Label({text: title, x_expand: true, style: 'font-weight: bold;'}));
             heading.add_child(new St.Label({text: value}));
             entry.add_child(heading);
+            if (metricKey) {
+                const quality = metricQuality(metricKey, metrics[metricKey], benchmark);
+                entry.add_child(new St.Label({
+                    text: `● ${qualityLabel(quality)}`,
+                    style: `color: ${metricColor(quality)};`,
+                }));
+            }
             entry.add_child(new St.Label({
                 text: description,
                 style: 'font-size: 0.9em; opacity: 0.8;',
@@ -492,11 +550,10 @@ export default class DnsChangerExtension extends Extension {
 
         this._addItem(_('System (restore original DNS)'), () => this._restoreOriginalDns());
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        const benchmarkItem = this._addItem(
-            this._benchmarking ? _('Benchmarking…') : _('Benchmark DNS providers'),
-            () => this._checkSpeeds(providers)
-        );
-        benchmarkItem.setSensitive(!this._busy && !this._benchmarking);
+        const benchmarkItem = this._addItem(_('Run full DNS benchmark'), () => {
+            void this._checkSpeeds(loadProviders(this._settings), true);
+        }, true);
+        benchmarkItem.setSensitive(providers.length > 0 && this._benchmarkKind !== 'full');
         this._benchmarkMenuItem = benchmarkItem;
         this._addItem(_('Add provider…'), () => this.openPreferences());
 
@@ -629,39 +686,61 @@ export default class DnsChangerExtension extends Extension {
         }
     }
 
-    async _checkSpeeds(providers, notifyOnCompletion = true) {
-        if (this._busy || this._benchmarking)
+    async _checkSpeeds(providers, fullBenchmark = false) {
+        if (!this._enabled || providers.length === 0 ||
+            (this._benchmarking && (!fullBenchmark || this._benchmarkKind === 'full')))
             return;
 
-        if (providers.length === 0) {
-            if (notifyOnCompletion)
-                this._notify(_('No DNS providers'), _('Add a provider before checking response times.'));
+        const providerKey = JSON.stringify(providers.map(provider => ({
+            id: provider.id,
+            ipv4: provider.ipv4,
+            ipv6: provider.ipv6,
+        })));
+        const hasFreshResults = this._lastBenchmarkAt !== null &&
+            this._lastBenchmarkProviderKey === providerKey &&
+            GLib.get_monotonic_time() - this._lastBenchmarkAt < BENCHMARK_REFRESH_INTERVAL * 1000;
+        if (!fullBenchmark && hasFreshResults)
             return;
-        }
 
+        this._benchmarkCancellable?.cancel();
+        const sampleCount = fullBenchmark ? FULL_BENCHMARK_SAMPLE_COUNT : QUICK_BENCHMARK_SAMPLE_COUNT;
+        this._lastBenchmarkAt = null;
+        this._lastBenchmarkProviderKey = null;
         this._benchmarking = true;
+        this._benchmarkKind = fullBenchmark ? 'full' : 'quick';
+        this._benchmarkMenuItem?.setSensitive(!fullBenchmark);
         const cancellable = new Gio.Cancellable();
         this._benchmarkCancellable = cancellable;
-        if (this._benchmarkMenuItem) {
-            this._benchmarkMenuItem.label.text = _('Benchmarking…');
-            this._benchmarkMenuItem.setSensitive(false);
+        const benchmarks = this._benchmarkResults;
+        const isCurrent = () => this._enabled && this._benchmarkCancellable === cancellable;
+        this._benchmarkSpinner.play();
+        for (const provider of providers) {
+            benchmarks.set(provider.id, {
+                state: 'queued',
+                kind: this._benchmarkKind,
+                mode: null,
+                samples: Array(sampleCount).fill(null),
+                completedCount: 0,
+                stats: null,
+            });
+            this._updateProviderRow(provider.id);
         }
         try {
             const mode = await detectProbeMode(cancellable);
-            const sampleCount = BENCHMARK_SAMPLE_COUNT;
-            const results = await Promise.all(providers.map(async provider => {
+            if (!isCurrent() || cancellable.is_cancelled())
+                return;
+
+            let nextProvider = 0;
+            const benchmarkProvider = async provider => {
                 const server = provider.ipv4[0] ?? provider.ipv6[0];
-                const benchmark = {
-                    state: 'running',
-                    mode,
-                    samples: Array(sampleCount).fill(null),
-                    completedCount: 0,
-                    stats: null,
-                };
-                this._benchmarkResults.set(provider.id, benchmark);
+                const benchmark = benchmarks.get(provider.id);
+                benchmark.state = 'running';
+                benchmark.mode = mode;
                 this._updateProviderRow(provider.id);
 
                 const stats = await benchmarkServer(server, mode, sampleCount, (index, sample) => {
+                    if (!isCurrent() || cancellable.is_cancelled())
+                        return;
                     benchmark.samples[index] = sample;
                     benchmark.completedCount++;
                     if (benchmark.completedCount % 10 === 0 ||
@@ -669,48 +748,43 @@ export default class DnsChangerExtension extends Extension {
                         this._updateProviderRow(provider.id);
                     }
                 }, cancellable);
-                if (!stats || cancellable.is_cancelled())
-                    return null;
+                if (!stats || !isCurrent() || cancellable.is_cancelled())
+                    return;
 
                 benchmark.state = 'complete';
                 benchmark.stats = stats;
                 this._updateProviderRow(provider.id);
-                return {name: provider.name, ...stats};
-            }));
-            if (!this._enabled || cancellable.is_cancelled())
-                return;
-
-            results.sort((first, second) => {
-                if (first.averageLatency === null)
-                    return second.averageLatency === null ? 0 : 1;
-                if (second.averageLatency === null)
-                    return -1;
-                return first.averageLatency - second.averageLatency;
+            };
+            const workers = Array.from({
+                length: Math.min(providers.length, BENCHMARK_PROVIDER_CONCURRENCY),
+            }, async () => {
+                while (nextProvider < providers.length && isCurrent() && !cancellable.is_cancelled())
+                    await benchmarkProvider(providers[nextProvider++]);
             });
-
-            const unit = mode === 'dns'
-                ? _('DNS benchmark · average latency / burst queries per second / responses')
-                : _('ICMP ping · average latency / responses (install dig for DNS throughput)');
-            const lines = results.map(result => {
-                const latency = result.averageLatency === null
-                    ? _('unavailable')
-                    : `${Math.round(result.averageLatency)} ms`;
-                const throughput = result.throughput === null
-                    ? ''
-                    : ` · ${Math.round(result.throughput)} q/s`;
-                return `${result.name}: ${latency}${throughput} · ${result.responseCount}/${result.sampleCount}`;
-            });
-            if (notifyOnCompletion)
-                this._notify(_('DNS benchmark complete'), `${unit}\n${lines.join('\n')}`);
+            await Promise.all(workers);
+            if (isCurrent() && providers.every(provider =>
+                benchmarks.get(provider.id)?.state === 'complete')) {
+                this._lastBenchmarkAt = GLib.get_monotonic_time();
+                this._lastBenchmarkProviderKey = providerKey;
+            }
         } catch (error) {
-            this._notify(_('Could not benchmark DNS providers'), error.message);
+            if (isCurrent() && !cancellable.is_cancelled()) {
+                cancellable.cancel();
+                for (const provider of providers) {
+                    const benchmark = benchmarks.get(provider.id);
+                    if (benchmark.state === 'queued' || benchmark.state === 'running')
+                        benchmark.state = 'failed';
+                    this._updateProviderRow(provider.id);
+                }
+                this._notify(_('Could not benchmark DNS providers'), error.message);
+            }
         } finally {
-            this._benchmarking = false;
-            if (this._benchmarkCancellable === cancellable)
+            if (isCurrent()) {
+                this._benchmarking = false;
+                this._benchmarkKind = null;
                 this._benchmarkCancellable = null;
-            if (this._benchmarkMenuItem) {
-                this._benchmarkMenuItem.label.text = _('Benchmark DNS providers');
-                this._benchmarkMenuItem.setSensitive(!this._busy);
+                this._benchmarkSpinner.stop();
+                this._benchmarkMenuItem?.setSensitive(loadProviders(this._settings).length > 0);
             }
         }
     }

@@ -128,13 +128,23 @@ function dnsValue(servers) {
 }
 
 export async function updateProfileDns(uuid, dnsSettings) {
-    await runChecked([
+    const ipv6Method = await runChecked([
+        'nmcli', '--get-values', 'ipv6.method', 'connection', 'show', uuid,
+    ]);
+    const args = [
         'nmcli', 'connection', 'modify', uuid,
         'ipv4.ignore-auto-dns', dnsSettings.ipv4IgnoreAutoDns,
         'ipv4.dns', dnsValue(dnsSettings.ipv4DnsServers ?? []),
-        'ipv6.ignore-auto-dns', dnsSettings.ipv6IgnoreAutoDns,
-        'ipv6.dns', dnsValue(dnsSettings.ipv6DnsServers ?? []),
-    ]);
+    ];
+
+    if (normalizeNmValue(ipv6Method) !== 'disabled') {
+        args.push(
+            'ipv6.ignore-auto-dns', dnsSettings.ipv6IgnoreAutoDns,
+            'ipv6.dns', dnsValue(dnsSettings.ipv6DnsServers ?? []),
+        );
+    }
+
+    await runChecked(args);
 }
 
 export async function restartNetworkManager() {
