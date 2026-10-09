@@ -19,15 +19,15 @@ import {
 const BENCHMARK_SAMPLE_COUNT = 300;
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
 const DOT_METRICS = [
-    {key: 'medianLatency', label: _('Median lookup time')},
-    {key: 'p95Latency', label: _('P95 lookup time')},
-    {key: 'successRate', label: _('Success rate')},
-    {key: 'consistency', label: _('Consistency')},
+    {key: 'medianLatency', label: 'Median lookup time'},
+    {key: 'p95Latency', label: 'P95 lookup time'},
+    {key: 'successRate', label: 'Success rate'},
+    {key: 'consistency', label: 'Consistency'},
 ];
 const DEFAULT_PROVIDER_FEATURES = {
     cloudflare: ['DNSSEC'],
     google: ['DNSSEC'],
-    quad9: ['DNSSEC', _('Malware blocking')],
+    quad9: ['DNSSEC', 'Malware blocking'],
 };
 const REGIONAL_PROVIDER_PRESETS = {
     iran: [
@@ -198,7 +198,7 @@ function providerFeatures(provider) {
     if (typeof provider.features === 'string' && provider.features.trim())
         return provider.features.trim();
     if (DEFAULT_PROVIDER_FEATURES[provider.id])
-        return DEFAULT_PROVIDER_FEATURES[provider.id].join(' · ');
+        return DEFAULT_PROVIDER_FEATURES[provider.id].map(feature => _(feature)).join(' · ');
     return _('Not specified');
 }
 
@@ -331,17 +331,18 @@ export default class DnsChangerExtension extends Extension {
         });
         const dotsBox = new St.BoxLayout({style: 'spacing: 2px;'});
         const dots = DOT_METRICS.map(metric => {
+            const labelText = _(metric.label);
             const label = new St.Label({text: '●', style: 'font-size: 9px;'});
             const button = new St.Button({
                 child: label,
                 can_focus: true,
                 track_hover: true,
                 style_class: 'flat',
-                tooltip_text: `${metric.label}. ${_('Click to view benchmark details')}`,
+                accessible_name: `${labelText}. ${_('Click to view benchmark details')}`,
             });
             button.connect('clicked', () => this._showBenchmarkDetails(provider));
             dotsBox.add_child(button);
-            return {key: metric.key, label: metric.label, button, dot: label};
+            return {key: metric.key, label: labelText, button, dot: label};
         });
 
         item.add_child(nameLabel);
@@ -382,7 +383,7 @@ export default class DnsChangerExtension extends Extension {
         row.dots.forEach(dot => {
             const quality = metricQuality(dot.key, metrics[dot.key], benchmark);
             dot.dot.style = `color: ${metricColor(quality)}; font-size: 9px;`;
-            dot.button.tooltip_text = `${dot.label}: ${metricValue(dot.key, metrics, benchmark)} · ` +
+            dot.button.accessible_name = `${dot.label}: ${metricValue(dot.key, metrics, benchmark)} · ` +
                 `${qualityLabel(quality)}. ${_('Click to view benchmark details')}`;
         });
     }

@@ -19,7 +19,7 @@ Regional presets are saved as custom providers and can be removed in Preferences
 
 ## Requirements
 
-- GNOME Shell 45 or newer
+- GNOME Shell 45–51 (the versions declared in `metadata.json`)
 - NetworkManager with `nmcli`
 - `dig` for DNS latency and throughput, or `ping` for the fallback latency check
 
@@ -31,19 +31,19 @@ Changing a saved system connection or restarting NetworkManager may require auth
 make install
 ```
 
-`make install` builds the bundle and installs it for the current user. GNOME Shell may need a new session to discover a manually installed extension. Log out and back in, then enable it:
+`make install` builds the bundle and installs it for the current user. If the extension is already enabled, the target reloads it in the current session. For a first install or a disabled extension, enable it with:
 
 ```sh
-gnome-extensions enable dns-changer@hossein.dev
+make enable
 ```
 
-You can also run `make enable` after starting the new session. If you already built the bundle and are inside `dist/`, install it with:
+If GNOME Shell has not discovered a first-time manual install, start a new session and run `make enable`. If you already built the bundle and are inside `dist/`, install it with:
 
 ```sh
 gnome-extensions install --force dns-changer@hossein.dev.shell-extension.zip
 ```
 
-Then log out and back in before enabling it.
+For that manual install, enable it with `gnome-extensions enable dns-changer@hossein.dev`. If it was already enabled, reload it with `gnome-extensions disable dns-changer@hossein.dev && gnome-extensions enable dns-changer@hossein.dev`.
 
 To remove generated build files:
 

@@ -9,8 +9,19 @@ pack:
 	gnome-extensions pack --force --out-dir=dist --extra-source=network.js --extra-source=LICENSE
 
 install: pack
-	gnome-extensions install --force dist/$(ZIP)
-	@printf 'Installed. Log out and back in, then run: gnome-extensions enable $(UUID)\n'
+	@set -eu; \
+	was_enabled=0; \
+	if gnome-extensions list --enabled | grep -Fxq '$(UUID)'; then \
+		was_enabled=1; \
+		gnome-extensions disable '$(UUID)'; \
+	fi; \
+	gnome-extensions install --force 'dist/$(ZIP)'; \
+	if [ "$$was_enabled" -eq 1 ]; then \
+		gnome-extensions enable '$(UUID)'; \
+		printf 'Installed and reloaded $(UUID) in the current GNOME session.\n'; \
+	else \
+		printf 'Installed. Enable it with: make enable\n'; \
+	fi
 
 enable:
 	gnome-extensions enable $(UUID)
