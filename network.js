@@ -11,7 +11,7 @@ const MANAGED_CONNECTION_TYPES = new Set([
     'infiniband',
 ]);
 
-export async function runCommand(argv) {
+export async function runCommand(argv, cancellable = null) {
     let process;
 
     try {
@@ -26,18 +26,29 @@ export async function runCommand(argv) {
     }
 
     return new Promise((resolve, reject) => {
-        process.communicate_utf8_async(null, null, (subprocess, result) => {
-            try {
-                const [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
-                resolve({
-                    successful: subprocess.get_successful(),
-                    stdout: stdout ?? '',
-                    stderr: stderr ?? '',
-                });
-            } catch (error) {
-                reject(error);
-            }
-        });
+        const cancellationId = cancellable?.connect(() => process.force_exit()) ?? 0;
+        const finish = callback => {
+            if (cancellationId)
+                cancellable.disconnect(cancellationId);
+            callback();
+        };
+
+        try {
+            process.communicate_utf8_async(null, cancellable, (subprocess, result) => {
+                try {
+                    const [, stdout, stderr] = subprocess.communicate_utf8_finish(result);
+                    finish(() => resolve({
+                        successful: subprocess.get_successful(),
+                        stdout: stdout ?? '',
+                        stderr: stderr ?? '',
+                    }));
+                } catch (error) {
+                    finish(() => reject(error));
+                }
+            });
+        } catch (error) {
+            finish(() => reject(error));
+        }
     });
 }
 
@@ -73,6 +84,17 @@ export async function getActiveConnection() {
     }
 
     return connection;
+}
+
+export async function readActiveDnsServers(connection) {
+    const output = await runChecked([
+        'nmcli', '--get-values', 'IP4.DNS,IP6.DNS',
+        'device', 'show', connection.device,
+    ]);
+
+    return output.split(/\r?\n/)
+        .map(value => value.trim())
+        .filter(value => value && value !== '--');
 }
 
 function normalizeNmValue(value) {
@@ -136,9 +158,9 @@ export async function reloadConnection(connection) {
     }
 }
 
-export async function detectProbeMode() {
+export async function detectProbeMode(cancellable = null) {
     try {
-        await runCommand(['dig', '-v']);
+        await runCommand(['dig', '-v'], cancellable);
         return 'dns';
     } catch (error) {
         if (!error.commandUnavailable)
@@ -146,7 +168,7 @@ export async function detectProbeMode() {
     }
 
     try {
-        await runCommand(['ping', '-V']);
+        await runCommand(['ping', '-V'], cancellable);
         return 'icmp';
     } catch (error) {
         if (error.commandUnavailable)
@@ -155,12 +177,12 @@ export async function detectProbeMode() {
     }
 }
 
-export async function probeServer(server, mode) {
+export async function probeServer(server, mode, cancellable = null) {
     const isIpv6 = server.includes(':');
     const argv = mode === 'dns'
         ? ['dig', '+time=1', '+tries=1', '+noall', '+comments', '+stats', `@${server}`, 'example.com', 'A']
         : ['ping', '-n', '-c', '1', '-W', '1', ...(isIpv6 ? ['-6'] : []), server];
-    const result = await runCommand(argv);
+    const result = await runCommand(argv, cancellable);
     const output = `${result.stdout}\n${result.stderr}`;
 
     if (mode === 'dns') {
@@ -195,25 +217,59 @@ export async function probeServer(server, mode) {
     return {server, latency: null, mode, error: 'No ping response'};
 }
 
-export async function benchmarkServer(server, mode, sampleCount, onSample) {
+export async function benchmarkServer(server, mode, sampleCount, onSample, cancellable = null) {
     const startedAt = GLib.get_monotonic_time();
-    const samples = await Promise.all(Array.from({length: sampleCount}, async (_, index) => {
-        let sample;
-        try {
-            sample = await probeServer(server, mode);
-        } catch (error) {
-            sample = {server, mode, latency: null, error: error.message};
-        }
+    const samples = Array(sampleCount);
+    let nextIndex = 0;
+    const workerCount = Math.min(sampleCount, 10);
+    const workers = Array.from({length: workerCount}, async () => {
+        while (nextIndex < sampleCount && !cancellable?.is_cancelled()) {
+            const index = nextIndex++;
+            let sample;
+            try {
+                sample = await probeServer(server, mode, cancellable);
+            } catch (error) {
+                if (cancellable?.is_cancelled())
+                    break;
+                sample = {server, mode, latency: null, error: error.message};
+            }
 
-        onSample?.(index, sample);
-        return sample;
-    }));
+            if (cancellable?.is_cancelled())
+                break;
+
+            samples[index] = sample;
+            onSample?.(index, sample);
+        }
+    });
+    await Promise.all(workers);
+    if (cancellable?.is_cancelled())
+        return null;
+
     const elapsedMs = (GLib.get_monotonic_time() - startedAt) / 1000;
     const successfulSamples = samples.filter(sample => sample.latency !== null);
     const latencies = successfulSamples.map(sample => sample.latency);
+    const sortedLatencies = [...latencies].sort((first, second) => first - second);
     const responseSizes = successfulSamples
         .map(sample => sample.responseBytes)
         .filter(size => size !== null && size !== undefined);
+    const medianLatency = sortedLatencies.length
+        ? sortedLatencies.length % 2 === 1
+            ? sortedLatencies[Math.floor(sortedLatencies.length / 2)]
+            : (sortedLatencies[sortedLatencies.length / 2 - 1] +
+                sortedLatencies[sortedLatencies.length / 2]) / 2
+        : null;
+    const p95Latency = sortedLatencies.length
+        ? sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1]
+        : null;
+    const meanLatency = latencies.length
+        ? latencies.reduce((total, latency) => total + latency, 0) / latencies.length
+        : null;
+    const consistency = meanLatency === null
+        ? null
+        : Math.sqrt(latencies.reduce(
+            (total, latency) => total + (latency - meanLatency) ** 2,
+            0
+        ) / latencies.length);
 
     return {
         server,
@@ -221,8 +277,11 @@ export async function benchmarkServer(server, mode, sampleCount, onSample) {
         samples,
         sampleCount,
         responseCount: successfulSamples.length,
+        medianLatency,
+        p95Latency,
+        consistency,
         averageLatency: latencies.length
-            ? latencies.reduce((total, latency) => total + latency, 0) / latencies.length
+            ? meanLatency
             : null,
         minLatency: latencies.length ? Math.min(...latencies) : null,
         maxLatency: latencies.length ? Math.max(...latencies) : null,

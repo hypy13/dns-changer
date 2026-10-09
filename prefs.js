@@ -4,8 +4,6 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
-
 function parseProviders(settings) {
     return settings.get_strv('dns-providers').flatMap(entry => {
         try {
@@ -32,7 +30,7 @@ function parseAddresses(text, family, fieldName) {
 
 export default class DnsChangerPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        this._settings = this.getSettings(SETTINGS_SCHEMA);
+        this._settings = this.getSettings();
         this._providerRows = new Map();
 
         const page = new Adw.PreferencesPage({
@@ -51,16 +49,18 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
 
         const formGroup = new Adw.PreferencesGroup({
             title: _('Add a custom provider'),
-            description: _('Enter comma-separated server addresses. At least one IPv4 or IPv6 address is required.'),
+            description: _('Enter comma-separated server addresses and optional provider features. At least one IPv4 or IPv6 address is required.'),
         });
         page.add(formGroup);
 
         this._nameEntry = new Adw.EntryRow({title: _('Provider name')});
         this._ipv4Entry = new Adw.EntryRow({title: _('IPv4 DNS servers')});
         this._ipv6Entry = new Adw.EntryRow({title: _('IPv6 DNS servers')});
+        this._featuresEntry = new Adw.EntryRow({title: _('Features (optional)')});
         formGroup.add(this._nameEntry);
         formGroup.add(this._ipv4Entry);
         formGroup.add(this._ipv6Entry);
+        formGroup.add(this._featuresEntry);
 
         this._statusRow = new Adw.ActionRow();
         this._statusRow.visible = false;
@@ -76,14 +76,29 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
         formGroup.add(addRow);
 
         window.add(page);
+        window.connect('close-request', () => {
+            this._settings = null;
+            this._providerRows = null;
+            this._providersGroup = null;
+            this._nameEntry = null;
+            this._ipv4Entry = null;
+            this._ipv6Entry = null;
+            this._featuresEntry = null;
+            this._statusRow = null;
+            return false;
+        });
     }
 
     _appendProviderRow(provider) {
         const ipv4 = provider.ipv4.join(', ') || _('none');
         const ipv6 = provider.ipv6.join(', ') || _('none');
+        const features = Array.isArray(provider.features)
+            ? provider.features.filter(Boolean).join(' · ')
+            : '';
         const row = new Adw.ActionRow({
             title: provider.name,
-            subtitle: `IPv4: ${ipv4} · IPv6: ${ipv6}`,
+            subtitle: `IPv4: ${ipv4} · IPv6: ${ipv6}` +
+                (features ? ` · ${_('Features')}: ${features}` : ''),
         });
 
         if (provider.custom) {
@@ -126,6 +141,9 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
                 name,
                 ipv4,
                 ipv6,
+                features: this._featuresEntry.text.split(/[;,·]/)
+                    .map(feature => feature.trim())
+                    .filter(Boolean),
                 custom: true,
             };
             providers.push(provider);
@@ -134,6 +152,7 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
             this._nameEntry.text = '';
             this._ipv4Entry.text = '';
             this._ipv6Entry.text = '';
+            this._featuresEntry.text = '';
             this._setStatus('', '');
         } catch (error) {
             this._setStatus(_('Could not add provider'), error.message);
