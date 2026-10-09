@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.dns-changer"
+          path="/org/gnome/shell/extensions/dns-changer/">
+    <key name="dns-providers" type="as">
+      <default>[
+        '{"id":"cloudflare","name":"Cloudflare","ipv4":["1.1.1.1","1.0.0.1"],"ipv6":["2606:4700:4700::1111","2606:4700:4700::1001"]}',
+        '{"id":"google","name":"Google","ipv4":["8.8.8.8","8.8.4.4"],"ipv6":["2001:4860:4860::8888","2001:4860:4860::8844"]}',
+        '{"id":"quad9","name":"Quad9","ipv4":["9.9.9.9","149.112.112.112"],"ipv6":["2620:fe::fe","2620:fe::9"]}'
+      ]</default>
+      <summary>Configured DNS providers</summary>
+      <description>JSON-encoded DNS provider entries shown in the panel menu.</description>
+    </key>
+    <key name="profile-backups" type="as">
+      <default>[]</default>
+      <summary>Original DNS settings for changed connections</summary>
+      <description>Used to restore a NetworkManager profile's DNS settings.</description>
+    </key>
+  </schema>
+</schemalist>

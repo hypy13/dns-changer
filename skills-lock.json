@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "gnome-shell-extensions": {
+      "source": "ahmed4g/gnome-shell-extensions-skill",
+      "sourceType": "github",
+      "skillPath": "SKILLs/gnome-shell-extensions/SKILL.md",
+      "computedHash": "21f25f5c68e67e9204b99935a354cc6a088dd0b8d021207d1cc0b3ce3a54a684"
+    }
+  }
+}
