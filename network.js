@@ -137,24 +137,13 @@ export async function updateProfileDns(uuid, dnsSettings) {
     ]);
 }
 
-export async function reloadConnection(connection) {
+export async function restartNetworkManager() {
     try {
-        await runChecked(['nmcli', 'device', 'reapply', connection.device]);
-        return 'reapplied';
-    } catch (reapplyError) {
-        try {
-            await runChecked([
-                'nmcli', '--wait', '20',
-                'connection', 'up', connection.uuid,
-                'ifname', connection.device,
-            ]);
-            return 'reconnected';
-        } catch (reconnectError) {
-            throw new Error(
-                `The DNS settings were saved, but NetworkManager could not apply them. ` +
-                `Reapply: ${reapplyError.message} Reconnect: ${reconnectError.message}`
-            );
-        }
+        await runChecked(['systemctl', 'restart', 'NetworkManager.service']);
+    } catch (error) {
+        throw new Error(
+            `The DNS settings were saved, but NetworkManager could not be restarted to apply them: ${error.message}`
+        );
     }
 }
 

@@ -12,11 +12,12 @@ import {
     getActiveConnection,
     readActiveDnsServers,
     readProfileDns,
-    reloadConnection,
+    restartNetworkManager,
     updateProfileDns,
 } from './network.js';
 
 const BENCHMARK_SAMPLE_COUNT = 300;
+const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
 const DOT_METRICS = [
     {key: 'medianLatency', label: _('Median lookup time')},
     {key: 'p95Latency', label: _('P95 lookup time')},
@@ -268,7 +269,7 @@ export default class DnsChangerExtension extends Extension {
         this._currentDnsRequest = 0;
         this._benchmarkMenuItem = null;
         this._benchmarkCancellable = null;
-        this._settings = this.getSettings();
+        this._settings = this.getSettings(SETTINGS_SCHEMA);
         this._indicator = new PanelMenu.Button(0.0, _('DNS Changer'), false);
 
         const icon = new St.Icon({
@@ -586,12 +587,10 @@ export default class DnsChangerExtension extends Extension {
             }
 
             await updateProfileDns(connection.uuid, providerDns(provider));
-            const reloadMode = await reloadConnection(connection);
+            await restartNetworkManager();
             this._notify(
                 _('DNS changed'),
-                reloadMode === 'reconnected'
-                    ? _(`${provider.name} is active. The connection was reactivated.`)
-                    : _(`${provider.name} is active. NetworkManager reapplied the connection.`)
+                _(`${provider.name} is active. NetworkManager was restarted to apply the DNS settings.`)
             );
         } catch (error) {
             this._notify(_('Could not change DNS'), error.message);
@@ -615,14 +614,12 @@ export default class DnsChangerExtension extends Extension {
             }
 
             await updateProfileDns(connection.uuid, backupToDns(backup));
-            const reloadMode = await reloadConnection(connection);
+            await restartNetworkManager();
             backups.delete(connection.uuid);
             saveBackups(this._settings, backups);
             this._notify(
                 _('Original DNS restored'),
-                reloadMode === 'reconnected'
-                    ? _('The saved DNS settings were restored and the connection was reactivated.')
-                    : _('The saved DNS settings were restored and reapplied.')
+                _('The saved DNS settings were restored and NetworkManager was restarted to apply them.')
             );
         } catch (error) {
             this._notify(_('Could not restore DNS'), error.message);
