@@ -2,6 +2,7 @@
   "uuid": "dns-changer@hossein.dev",
   "name": "DNS Changer",
   "description": "Switch NetworkManager DNS providers and compare their response times.",
+  "settings-schema": "org.gnome.shell.extensions.dns-changer",
   "version": 1,
   "shell-version": ["45", "46", "47", "48", "49", "50", "51"]
 }

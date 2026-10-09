@@ -4,6 +4,8 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
+
 function parseProviders(settings) {
     return settings.get_strv('dns-providers').flatMap(entry => {
         try {
@@ -30,7 +32,7 @@ function parseAddresses(text, family, fieldName) {
 
 export default class DnsChangerPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        this._settings = this.getSettings();
+        this._settings = this.getSettings(SETTINGS_SCHEMA);
         this._providerRows = new Map();
 
         const page = new Adw.PreferencesPage({

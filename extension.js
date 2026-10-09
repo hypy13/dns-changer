@@ -6,13 +6,15 @@ import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 import {
+    benchmarkServer,
     detectProbeMode,
     getActiveConnection,
-    probeServer,
     readProfileDns,
     reloadConnection,
     updateProfileDns,
 } from './network.js';
+
+const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
 
 function loadProviders(settings) {
     return settings.get_strv('dns-providers').flatMap(entry => {
@@ -75,8 +77,11 @@ export default class DnsChangerExtension extends Extension {
     enable() {
         this._enabled = true;
         this._busy = false;
-        this._settings = this.getSettings();
-        this._indicator = new PanelMenu.Button(0.0, _('DNS Changer'), true);
+        this._benchmarking = false;
+        this._benchmarkResults = new Map();
+        this._providerRows = new Map();
+        this._settings = this.getSettings(SETTINGS_SCHEMA);
+        this._indicator = new PanelMenu.Button(0.0, _('DNS Changer'), false);
 
         const icon = new St.Icon({
             icon_name: 'preferences-system-network-symbolic',
@@ -95,6 +100,8 @@ export default class DnsChangerExtension extends Extension {
         this._enabled = false;
         this._indicator?.destroy();
         this._indicator = null;
+        this._benchmarkResults = null;
+        this._providerRows = null;
         this._settings = null;
     }
 
@@ -110,12 +117,83 @@ export default class DnsChangerExtension extends Extension {
         return item;
     }
 
+    _addProviderItem(provider) {
+        const item = new PopupMenu.PopupBaseMenuItem();
+        const nameLabel = new St.Label({text: provider.name, x_expand: true});
+        const metricsLabel = new St.Label({
+            style: 'font-size: 0.9em; opacity: 0.9;',
+        });
+        const dotsBox = new St.BoxLayout({style: 'spacing: 2px;'});
+        const dots = Array.from({length: 4}, () => {
+            const dot = new St.Label({text: '●'});
+            dotsBox.add_child(dot);
+            return dot;
+        });
+
+        item.add_child(nameLabel);
+        item.add_child(metricsLabel);
+        item.add_child(dotsBox);
+        item.connect('activate', () => this._applyProvider(provider));
+        item.setSensitive(!this._busy);
+        this._indicator.menu.addMenuItem(item);
+        this._providerRows.set(provider.id, {item, metricsLabel, dots});
+        this._updateProviderRow(provider.id);
+    }
+
+    _updateProviderRow(providerId) {
+        const row = this._providerRows?.get(providerId);
+        if (!row)
+            return;
+
+        const benchmark = this._benchmarkResults?.get(providerId);
+        const samples = benchmark?.samples ?? Array(4).fill(null);
+        const successful = samples.filter(sample => sample !== null && sample.latency !== null);
+        const latencies = successful.map(sample => sample.latency);
+        const averageLatency = latencies.length
+            ? latencies.reduce((total, latency) => total + latency, 0) / latencies.length
+            : null;
+
+        if (!benchmark) {
+            row.metricsLabel.text = _('— ms · — q/s · 0/4');
+        } else if (benchmark.state === 'running') {
+            const latencyText = averageLatency === null ? '—' : `${Math.round(averageLatency)}`;
+            row.metricsLabel.text = `${latencyText} ms · ${_('testing')} · ${successful.length}/4`;
+        } else {
+            const stats = benchmark.stats;
+            const latencyText = stats.averageLatency === null
+                ? '—'
+                : `${Math.round(stats.averageLatency)}`;
+            const rateText = stats.throughput === null
+                ? '—'
+                : `${Math.round(stats.throughput)}`;
+            const responseSizeText = stats.averageResponseBytes === null
+                ? ''
+                : ` · ${Math.round(stats.averageResponseBytes)} B`;
+            const rateUnit = stats.throughput === null ? 'ping' : 'q/s';
+            row.metricsLabel.text = `${latencyText} ms · ${rateText} ${rateUnit} · ` +
+                `${stats.responseCount}/${stats.sampleCount}${responseSizeText}`;
+        }
+
+        row.dots.forEach((dot, index) => {
+            const sample = samples[index];
+            const color = sample === null
+                ? '#ffffff; text-shadow: 0 0 2px #000000'
+                : sample.latency === null || sample.latency > 250
+                    ? '#ed333b'
+                    : sample.latency <= 50
+                        ? '#33d17a'
+                        : '#ffffff; text-shadow: 0 0 2px #000000';
+            dot.style = `color: ${color}; font-size: 9px;`;
+        });
+    }
+
     _populateMenu() {
         if (!this._indicator || !this._settings)
             return;
 
         const menu = this._indicator.menu;
         menu.removeAll();
+        this._providerRows.clear();
         const providers = loadProviders(this._settings);
 
         if (this._busy) {
@@ -123,9 +201,8 @@ export default class DnsChangerExtension extends Extension {
             busyItem.setSensitive(false);
             menu.addMenuItem(busyItem);
         } else {
-            for (const provider of providers) {
-                this._addItem(provider.name, () => this._applyProvider(provider));
-            }
+            for (const provider of providers)
+                this._addProviderItem(provider);
 
             if (providers.length === 0) {
                 const emptyItem = new PopupMenu.PopupMenuItem(_('Add DNS providers in Preferences'));
@@ -135,10 +212,14 @@ export default class DnsChangerExtension extends Extension {
         }
 
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addItem(_('Check DNS response time'), () => this._checkSpeeds(providers));
+        const benchmarkItem = this._addItem(
+            this._benchmarking ? _('Benchmarking…') : _('Benchmark DNS providers'),
+            () => this._checkSpeeds(providers)
+        );
+        benchmarkItem.setSensitive(!this._busy && !this._benchmarking);
         this._addItem(_('Restore original DNS for this connection'), () => this._restoreOriginalDns());
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._addItem(_('Manage DNS providers…'), () => this.openPreferences());
+        this._addItem(_('Add provider…'), () => this.openPreferences());
     }
 
     async _applyProvider(provider) {
@@ -202,7 +283,7 @@ export default class DnsChangerExtension extends Extension {
     }
 
     async _checkSpeeds(providers) {
-        if (this._busy)
+        if (this._busy || this._benchmarking)
             return;
 
         if (providers.length === 0) {
@@ -210,38 +291,56 @@ export default class DnsChangerExtension extends Extension {
             return;
         }
 
-        this._busy = true;
+        this._benchmarking = true;
         try {
             const mode = await detectProbeMode();
+            const sampleCount = 4;
             const results = await Promise.all(providers.map(async provider => {
                 const server = provider.ipv4[0] ?? provider.ipv6[0];
-                try {
-                    return {
-                        name: provider.name,
-                        ...await probeServer(server, mode),
-                    };
-                } catch (error) {
-                    return {name: provider.name, latency: null, error: error.message};
-                }
+                const benchmark = {
+                    state: 'running',
+                    mode,
+                    samples: Array(sampleCount).fill(null),
+                    stats: null,
+                };
+                this._benchmarkResults.set(provider.id, benchmark);
+                this._updateProviderRow(provider.id);
+
+                const stats = await benchmarkServer(server, mode, sampleCount, (index, sample) => {
+                    benchmark.samples[index] = sample;
+                    this._updateProviderRow(provider.id);
+                });
+                benchmark.state = 'complete';
+                benchmark.stats = stats;
+                this._updateProviderRow(provider.id);
+                return {name: provider.name, ...stats};
             }));
 
             results.sort((first, second) => {
-                if (first.latency === null)
-                    return second.latency === null ? 0 : 1;
-                if (second.latency === null)
+                if (first.averageLatency === null)
+                    return second.averageLatency === null ? 0 : 1;
+                if (second.averageLatency === null)
                     return -1;
-                return first.latency - second.latency;
+                return first.averageLatency - second.averageLatency;
             });
 
-            const unit = mode === 'dns' ? _('DNS query') : _('ICMP ping (approximate)');
-            const lines = results.map(result => result.latency === null
-                ? `${result.name}: ${result.error ?? _('unavailable')}`
-                : `${result.name}: ${result.latency} ms`);
-            this._notify(_('Provider response times'), `${unit}\n${lines.join('\n')}`);
+            const unit = mode === 'dns'
+                ? _('DNS benchmark · average latency / burst queries per second / responses')
+                : _('ICMP ping · average latency / responses (install dig for DNS throughput)');
+            const lines = results.map(result => {
+                const latency = result.averageLatency === null
+                    ? _('unavailable')
+                    : `${Math.round(result.averageLatency)} ms`;
+                const throughput = result.throughput === null
+                    ? ''
+                    : ` · ${Math.round(result.throughput)} q/s`;
+                return `${result.name}: ${latency}${throughput} · ${result.responseCount}/${result.sampleCount}`;
+            });
+            this._notify(_('DNS benchmark complete'), `${unit}\n${lines.join('\n')}`);
         } catch (error) {
-            this._notify(_('Could not check response times'), error.message);
+            this._notify(_('Could not benchmark DNS providers'), error.message);
         } finally {
-            this._busy = false;
+            this._benchmarking = false;
         }
     }
 }

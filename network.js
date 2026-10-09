@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 const MANAGED_CONNECTION_TYPES = new Set([
     '802-3-ethernet',
@@ -165,14 +166,24 @@ export async function probeServer(server, mode) {
     if (mode === 'dns') {
         const status = output.match(/status:\s*([A-Z]+)/)?.[1];
         const latency = output.match(/Query time:\s*(\d+)\s*msec/i)?.[1];
+        const answers = output.match(/\bANSWER:\s*(\d+)/i)?.[1];
+        const responseBytes = output.match(/MSG SIZE rcvd:\s*(\d+)/i)?.[1];
         if (status === 'NOERROR' && latency !== undefined) {
-            return {server, latency: Number(latency), mode};
+            return {
+                server,
+                latency: Number(latency),
+                mode,
+                status,
+                answers: answers === undefined ? null : Number(answers),
+                responseBytes: responseBytes === undefined ? null : Number(responseBytes),
+            };
         }
 
         return {
             server,
             latency: null,
             mode,
+            status: status ?? null,
             error: status ? `DNS ${status}` : 'No DNS response',
         };
     }
@@ -182,4 +193,44 @@ export async function probeServer(server, mode) {
         return {server, latency: Number(latency), mode};
 
     return {server, latency: null, mode, error: 'No ping response'};
+}
+
+export async function benchmarkServer(server, mode, sampleCount, onSample) {
+    const startedAt = GLib.get_monotonic_time();
+    const samples = await Promise.all(Array.from({length: sampleCount}, async (_, index) => {
+        let sample;
+        try {
+            sample = await probeServer(server, mode);
+        } catch (error) {
+            sample = {server, mode, latency: null, error: error.message};
+        }
+
+        onSample?.(index, sample);
+        return sample;
+    }));
+    const elapsedMs = (GLib.get_monotonic_time() - startedAt) / 1000;
+    const successfulSamples = samples.filter(sample => sample.latency !== null);
+    const latencies = successfulSamples.map(sample => sample.latency);
+    const responseSizes = successfulSamples
+        .map(sample => sample.responseBytes)
+        .filter(size => size !== null && size !== undefined);
+
+    return {
+        server,
+        mode,
+        samples,
+        sampleCount,
+        responseCount: successfulSamples.length,
+        averageLatency: latencies.length
+            ? latencies.reduce((total, latency) => total + latency, 0) / latencies.length
+            : null,
+        minLatency: latencies.length ? Math.min(...latencies) : null,
+        maxLatency: latencies.length ? Math.max(...latencies) : null,
+        throughput: mode === 'dns' && elapsedMs > 0
+            ? successfulSamples.length / (elapsedMs / 1000)
+            : null,
+        averageResponseBytes: responseSizes.length
+            ? responseSizes.reduce((total, size) => total + size, 0) / responseSizes.length
+            : null,
+    };
 }
