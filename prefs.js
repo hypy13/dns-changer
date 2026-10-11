@@ -2,7 +2,10 @@ import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
-import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
+import {
+    ExtensionPreferences,
+    gettext as _,
+} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
 
@@ -10,8 +13,10 @@ function parseProviders(settings) {
     return settings.get_strv('dns-providers').flatMap(entry => {
         try {
             const provider = JSON.parse(entry);
-            if (provider.id && provider.name && Array.isArray(provider.ipv4) && Array.isArray(provider.ipv6))
+            if (provider.id && provider.name &&
+                Array.isArray(provider.ipv4) && Array.isArray(provider.ipv6)) {
                 return [provider];
+            }
         } catch (error) {
             console.warn(`DNS Changer preferences: ignoring invalid provider: ${error.message}`);
         }
@@ -24,8 +29,12 @@ function parseAddresses(text, family, fieldName) {
     const addresses = text.trim().split(/[\s,;]+/).filter(Boolean);
     for (const address of addresses) {
         const parsed = Gio.InetAddress.new_from_string(address);
-        if (!parsed || parsed.get_family() !== family)
-            throw new Error(_('%s contains an invalid address: %s').replace('%s', fieldName).replace('%s', address));
+        if (!parsed || parsed.get_family() !== family) {
+            const message = _('%s contains an invalid address: %s')
+                .replace('%s', fieldName)
+                .replace('%s', address);
+            throw new Error(message);
+        }
     }
     return addresses;
 }
@@ -41,7 +50,9 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
         });
         const providersGroup = new Adw.PreferencesGroup({
             title: _('DNS providers'),
-            description: _('Choose a provider from the panel menu. Custom servers are stored in your user settings.'),
+            description: _(
+                'Choose a provider from the panel menu. Custom servers are stored in your user settings.'
+            ),
         });
         page.add(providersGroup);
         this._providersGroup = providersGroup;
@@ -51,7 +62,9 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
 
         const formGroup = new Adw.PreferencesGroup({
             title: _('Add a custom provider'),
-            description: _('Enter comma-separated server addresses and optional provider features. At least one IPv4 or IPv6 address is required.'),
+            description: _(
+                'Enter comma-separated server addresses and optional features. At least one IPv4 or IPv6 address is required.'
+            ),
         });
         page.add(formGroup);
 
@@ -130,11 +143,22 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
                 throw new Error(_('Enter a provider name.'));
 
             const providers = parseProviders(this._settings);
-            if (providers.some(provider => provider.name.toLocaleLowerCase() === name.toLocaleLowerCase()))
+            const normalizedName = name.toLocaleLowerCase();
+            if (providers.some(provider =>
+                provider.name.toLocaleLowerCase() === normalizedName)) {
                 throw new Error(_('A provider with this name already exists.'));
+            }
 
-            const ipv4 = parseAddresses(this._ipv4Entry.text, Gio.SocketFamily.IPV4, _('IPv4 DNS servers'));
-            const ipv6 = parseAddresses(this._ipv6Entry.text, Gio.SocketFamily.IPV6, _('IPv6 DNS servers'));
+            const ipv4 = parseAddresses(
+                this._ipv4Entry.text,
+                Gio.SocketFamily.IPV4,
+                _('IPv4 DNS servers')
+            );
+            const ipv6 = parseAddresses(
+                this._ipv6Entry.text,
+                Gio.SocketFamily.IPV6,
+                _('IPv6 DNS servers')
+            );
             if (ipv4.length === 0 && ipv6.length === 0)
                 throw new Error(_('Enter at least one IPv4 or IPv6 address.'));
 
@@ -149,7 +173,10 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
                 custom: true,
             };
             providers.push(provider);
-            this._settings.set_strv('dns-providers', providers.map(provider => JSON.stringify(provider)));
+            this._settings.set_strv(
+                'dns-providers',
+                providers.map(provider => JSON.stringify(provider))
+            );
             this._appendProviderRow(provider);
             this._nameEntry.text = '';
             this._ipv4Entry.text = '';
@@ -163,7 +190,10 @@ export default class DnsChangerPreferences extends ExtensionPreferences {
 
     _removeProvider(id) {
         const providers = parseProviders(this._settings).filter(provider => provider.id !== id);
-        this._settings.set_strv('dns-providers', providers.map(provider => JSON.stringify(provider)));
+        this._settings.set_strv(
+            'dns-providers',
+            providers.map(provider => JSON.stringify(provider))
+        );
 
         const row = this._providerRows.get(id);
         if (row)

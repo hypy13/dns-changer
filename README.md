@@ -35,7 +35,7 @@ These presets are saved as custom providers and can be removed in Preferences. T
 
 ## Compatibility and network behavior
 
-DNS Changer supports GNOME Shell versions 45–51 and connections managed by NetworkManager. Applying or restoring DNS settings restarts NetworkManager so the change takes effect. Your network connection may briefly disconnect and reconnect, and your desktop may ask you to authorize the change.
+DNS Changer declares support for GNOME Shell 50 and 51 and connections managed by NetworkManager. Applying or restoring DNS settings restarts NetworkManager so the change takes effect. Your network connection may briefly disconnect and reconnect, and your desktop may ask you to authorize the change.
 
 ## License
 

@@ -7,7 +7,8 @@ RESCAN_JS := (async () => { const uuid = "$(UUID)"; const Main = await import("r
 .PHONY: pack install rescan enable demo clean
 
 pack:
-	glib-compile-schemas schemas
+	glib-compile-schemas --strict --dry-run schemas
+	rm -f schemas/gschemas.compiled
 	mkdir -p dist
 	gnome-extensions pack --force --out-dir=dist --extra-source=network.js --extra-source=LICENSE
 

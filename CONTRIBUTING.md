@@ -2,7 +2,7 @@
 
 Thanks for your interest in improving DNS Changer. This guide covers the project structure, local build and demo workflows, and the checks to include with a contribution.
 
-DNS Changer is a GNOME Shell extension written in GJS using ES modules. It supports GNOME Shell 45–51, uses NetworkManager to update connection DNS settings, and stores extension preferences with GSettings.
+DNS Changer is a GNOME Shell extension written in GJS using ES modules. It declares support for GNOME Shell 50 and 51, uses NetworkManager to update connection DNS settings, and stores extension preferences with GSettings.
 
 ## Project structure
 
@@ -28,7 +28,7 @@ The nested demo requires a Wayland desktop session, `gnome-shell`, `dbus-run-ses
 make pack
 ```
 
-This compiles the GSettings schema and creates `dist/dns-changer@hossein.dev.shell-extension.zip`.
+This validates the GSettings schema and creates `dist/dns-changer@hossein.dev.shell-extension.zip`.
 
 ### Install in your user account
 
@@ -62,7 +62,7 @@ The demo isolates Shell and extension settings, but DNS actions still apply to y
 make clean
 ```
 
-This removes the generated `dist/` directory and compiled schema file.
+This removes the generated `dist/` directory and any compiled schema file from an earlier build.
 
 ## Development notes
 

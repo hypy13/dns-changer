@@ -152,7 +152,8 @@ export async function restartNetworkManager() {
         await runChecked(['systemctl', 'restart', 'NetworkManager.service']);
     } catch (error) {
         throw new Error(
-            `The DNS settings were saved, but NetworkManager could not be restarted to apply them: ${error.message}`
+            'The DNS settings were saved, but NetworkManager could not be ' +
+                `restarted to apply them: ${error.message}`
         );
     }
 }

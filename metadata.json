@@ -1,8 +1,8 @@
 {
   "uuid": "dns-changer@hossein.dev",
   "name": "DNS Changer",
-  "description": "Switch DNS providers on the active NetworkManager connection and restore original profile settings. The panel menu reuses benchmark results for ten minutes and offers a manual refresh action.",
+  "description": "Switch DNS providers for the active NetworkManager connection, compare response times, and restore saved DNS settings.",
   "url": "https://github.com/hypy13/dns-changer",
   "settings-schema": "org.gnome.shell.extensions.dns-changer",
-  "shell-version": ["45", "46", "47", "48", "49", "50", "51"]
+  "shell-version": ["50", "51"]
 }

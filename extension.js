@@ -25,10 +25,26 @@ const BENCHMARK_PROVIDER_CONCURRENCY = 2;
 const BENCHMARK_REFRESH_INTERVAL = 10 * 60 * 1000;
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.dns-changer';
 const BENCHMARK_METRICS = [
-    {key: 'medianLatency', label: 'Median lookup time', description: 'Typical response speed.'},
-    {key: 'p95Latency', label: 'P95 lookup time', description: 'Shows how slow queries can get under normal testing.'},
-    {key: 'successRate', label: 'Success rate', description: 'Helps avoid a fast but unreliable resolver.'},
-    {key: 'consistency', label: 'Consistency', description: 'Shows response-time variation using standard deviation.'},
+    {
+        key: 'medianLatency',
+        label: 'Median lookup time',
+        description: 'Typical response speed.',
+    },
+    {
+        key: 'p95Latency',
+        label: 'P95 lookup time',
+        description: 'Shows how slow queries can get under normal testing.',
+    },
+    {
+        key: 'successRate',
+        label: 'Success rate',
+        description: 'Helps avoid a fast but unreliable resolver.',
+    },
+    {
+        key: 'consistency',
+        label: 'Consistency',
+        description: 'Shows response-time variation using standard deviation.',
+    },
 ];
 const DEFAULT_PROVIDER_FEATURES = {
     cloudflare: ['DNSSEC'],
@@ -255,7 +271,8 @@ function readBackups(settings) {
 }
 
 function saveBackups(settings, backups) {
-    settings.set_strv('profile-backups', [...backups.values()].map(backup => JSON.stringify(backup)));
+    const entries = [...backups.values()].map(backup => JSON.stringify(backup));
+    settings.set_strv('profile-backups', entries);
 }
 
 function storedDnsToServers(value) {
@@ -343,7 +360,6 @@ export default class DnsChangerExtension extends Extension {
         this._benchmarkResults = null;
         this._providerRows = null;
         this._benchmarkMenuItem = null;
-        this._currentDnsLabel = null;
         this._benchmarkSpinner = null;
         this._benchmarkKind = null;
         this._settings = null;
@@ -390,7 +406,14 @@ export default class DnsChangerExtension extends Extension {
         item.connect('activate', () => this._applyProvider(provider));
         item.setSensitive(!this._busy);
         this._indicator.menu.addMenuItem(item);
-        this._providerRows.set(provider.id, {item, metricsLabel, spinner, summaryDot, summaryButton, provider});
+        this._providerRows.set(provider.id, {
+            item,
+            metricsLabel,
+            spinner,
+            summaryDot,
+            summaryButton,
+            provider,
+        });
         this._updateProviderRow(provider.id);
     }
 
@@ -416,7 +439,8 @@ export default class DnsChangerExtension extends Extension {
                 ? '—'
                 : `${Math.round(metrics.medianLatency)} ms`;
             const label = benchmark.kind === 'quick' ? _('Quick test…') : _('Full benchmark…');
-            row.metricsLabel.text = `${label} ${metrics.completedCount}/${metrics.sampleCount} · ${medianText} median`;
+            const progress = `${metrics.completedCount}/${metrics.sampleCount}`;
+            row.metricsLabel.text = `${label} ${progress} · ${medianText} median`;
         } else if (benchmark.state === 'failed') {
             row.metricsLabel.text = _('Benchmark unavailable');
         } else {
@@ -447,7 +471,8 @@ export default class DnsChangerExtension extends Extension {
             [
                 _('Test'),
                 benchmark
-                    ? `${benchmark.kind === 'quick' ? _('Quick') : _('Full')} · ${metrics.completedCount}/${metrics.sampleCount}`
+                    ? `${benchmark.kind === 'quick' ? _('Quick') : _('Full')} · ` +
+                        `${metrics.completedCount}/${metrics.sampleCount}`
                     : _('Not tested'),
                 benchmark?.kind === 'quick'
                     ? _('A quick estimate. Run the full benchmark for more reliable results.')
@@ -574,11 +599,13 @@ export default class DnsChangerExtension extends Extension {
 
         const providers = loadProviders(this._settings);
         const ids = new Set(providers.map(provider => provider.id));
-        const names = new Set(providers.map(provider => provider.name.normalize('NFKC').toLocaleLowerCase()));
-        const addressKey = provider => `${[...provider.ipv4].sort().join(',')}|${[...provider.ipv6].sort().join(',')}`;
+        const normalizeName = name => name.normalize('NFKC').toLocaleLowerCase();
+        const names = new Set(providers.map(provider => normalizeName(provider.name)));
+        const addressKey = provider =>
+            `${[...provider.ipv4].sort().join(',')}|${[...provider.ipv6].sort().join(',')}`;
         const addresses = new Set(providers.map(addressKey));
         const imported = presets.filter(provider => {
-            const normalizedName = provider.name.normalize('NFKC').toLocaleLowerCase();
+            const normalizedName = normalizeName(provider.name);
             const key = addressKey(provider);
             if (ids.has(provider.id) || names.has(normalizedName) || addresses.has(key))
                 return false;
@@ -590,7 +617,10 @@ export default class DnsChangerExtension extends Extension {
         });
 
         if (imported.length === 0) {
-            this._notify(_('Regional providers already added'), _('These DNS providers are already in your provider list.'));
+            this._notify(
+                _('Regional providers already added'),
+                _('These DNS providers are already in your provider list.')
+            );
             return;
         }
 
@@ -667,7 +697,10 @@ export default class DnsChangerExtension extends Extension {
             const backups = readBackups(this._settings);
             const backup = backups.get(connection.uuid);
             if (!backup) {
-                this._notify(_('Nothing to restore'), _('This connection has no saved DNS settings from DNS Changer.'));
+                this._notify(
+                    _('Nothing to restore'),
+                    _('This connection has no saved DNS settings from DNS Changer.')
+                );
                 return;
             }
 
@@ -688,8 +721,9 @@ export default class DnsChangerExtension extends Extension {
 
     async _checkSpeeds(providers, fullBenchmark = false) {
         if (!this._enabled || providers.length === 0 ||
-            (this._benchmarking && (!fullBenchmark || this._benchmarkKind === 'full')))
+            (this._benchmarking && (!fullBenchmark || this._benchmarkKind === 'full'))) {
             return;
+        }
 
         const providerKey = JSON.stringify(providers.map(provider => ({
             id: provider.id,
@@ -703,7 +737,9 @@ export default class DnsChangerExtension extends Extension {
             return;
 
         this._benchmarkCancellable?.cancel();
-        const sampleCount = fullBenchmark ? FULL_BENCHMARK_SAMPLE_COUNT : QUICK_BENCHMARK_SAMPLE_COUNT;
+        const sampleCount = fullBenchmark
+            ? FULL_BENCHMARK_SAMPLE_COUNT
+            : QUICK_BENCHMARK_SAMPLE_COUNT;
         this._lastBenchmarkAt = null;
         this._lastBenchmarkProviderKey = null;
         this._benchmarking = true;
