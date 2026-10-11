@@ -4,5 +4,12 @@
   "description": "Switch DNS providers for the active NetworkManager connection, compare response times, and restore saved DNS settings.",
   "url": "https://github.com/hypy13/dns-changer",
   "settings-schema": "org.gnome.shell.extensions.dns-changer",
-  "shell-version": ["50"]
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ]
 }

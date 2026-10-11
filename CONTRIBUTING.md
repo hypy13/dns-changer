@@ -2,7 +2,7 @@
 
 Thanks for your interest in improving DNS Changer. This guide covers the project structure, local build and demo workflows, and the checks to include with a contribution.
 
-DNS Changer is a GNOME Shell extension written in GJS using ES modules. It declares support for GNOME Shell 50 and 51, uses NetworkManager to update connection DNS settings, and stores extension preferences with GSettings.
+DNS Changer is a GNOME Shell extension written in GJS using ES modules. It declares support for GNOME Shell 45–50, uses NetworkManager to update connection DNS settings, and stores extension preferences with GSettings. The older compatibility entries should be checked on their corresponding Shell versions before release.
 
 ## Project structure
 
